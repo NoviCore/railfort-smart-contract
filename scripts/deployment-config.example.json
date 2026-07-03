@@ -1,0 +1,51 @@
+{
+  "_note": "All limit amounts are in USDT base units (1 USDT = 1,000,000 — token has 6 decimals). Copy this file to deployment-config.json and fill in real addresses.",
+
+  "token": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+
+  "corporateOwner": "REPLACE_WITH_CORPORATE_WALLET_ADDRESS",
+
+  "managers": [
+    "REPLACE_WITH_MANAGER_1_ADDRESS",
+    "REPLACE_WITH_MANAGER_2_ADDRESS"
+  ],
+
+  "weights": [2, 1],
+
+  "dailyLimits":   [5000000000,   1000000000],
+  "weeklyLimits":  [20000000000,  5000000000],
+  "monthlyLimits": [80000000000,  20000000000],
+  "totalLimits":   [500000000000, 100000000000],
+
+  "_limitsReadable": {
+    "manager1": "daily 5,000 / weekly 20,000 / monthly 80,000 / total 500,000 USDT",
+    "manager2": "daily 1,000 / weekly  5,000 / monthly 20,000 / total 100,000 USDT"
+  },
+
+  "tiers": [
+    { "maxAmount": 100000000,  "threshold": 1 },
+    { "maxAmount": 500000000,  "threshold": 2 },
+    { "maxAmount": 1000000000, "threshold": 3 }
+  ],
+
+  "_tiersReadable": [
+    "≤ 100 USDT  → threshold 1 (any single manager)",
+    "≤ 500 USDT  → threshold 2 (manager1 alone, or manager2 + any weight-1 co-signer)",
+    "≤ 1,000 USDT → threshold 3 (all managers must sign)"
+  ],
+
+  "globalLimits": {
+    "daily":   0,
+    "weekly":  0,
+    "monthly": 0,
+    "total":   0,
+    "_note": "0 means no global limit. Set to a positive value to cap ALL managers combined."
+  },
+
+  "maxBatchSize": 10,
+
+  "ownershipTransferDelay": 259200,
+  "_ownershipTransferDelayNote": "Seconds the pending owner must wait before accepting. 259200 = 72 hours.",
+
+  "approvalAmount": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+}
