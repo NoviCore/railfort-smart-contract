@@ -1,0 +1,40 @@
+# Node / package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Build output — compiled artifacts get attached to GitHub Releases,
+# not committed. Keeps the repo lean and prevents stale bytecode
+# from drifting away from source.
+artifacts/
+build/
+cache/
+out/
+
+# Hardhat
+typechain-types/
+
+# Foundry
+forge-cache/
+broadcast/
+
+# TronBox
+build/contracts/
+
+# Solidity coverage
+coverage/
+coverage.json
+
+# Env + secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
