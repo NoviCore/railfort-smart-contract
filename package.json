@@ -7,12 +7,12 @@
     "test": "test"
   },
   "scripts": {
-    "compile":         "node node_modules/tronbox/build/tronbox.js compile",
-    "test":            "node node_modules/tronbox/build/tronbox.js test --network development",
-    "migrate":         "node node_modules/tronbox/build/tronbox.js migrate --network development",
-    "migrate:nile":    "node node_modules/tronbox/build/tronbox.js migrate --network nile",
-    "migrate:shasta":  "node node_modules/tronbox/build/tronbox.js migrate --network shasta",
-    "migrate:mainnet": "node node_modules/tronbox/build/tronbox.js migrate --network mainnet",
+    "compile":         "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js compile",
+    "test":            "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js test --network development",
+    "migrate":         "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js migrate --network development",
+    "migrate:nile":    "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js migrate --network nile",
+    "migrate:shasta":  "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js migrate --network shasta",
+    "migrate:mainnet": "node --require ./scripts/tronbox-preload.js node_modules/tronbox/build/tronbox.js migrate --network mainnet",
     "node:local":      "docker run -d -p 9090:9090 --rm --name tron trontools/quickstart",
     "node:proxy":      "node scripts/tron-proxy.js",
     "pretest":         "node scripts/fund-dev-account.js"

@@ -116,7 +116,8 @@ async function withRetry(fn, maxAttempts = 4, delayMs = 1500) {
             const msg = (e && typeof e.message === 'string') ? e.message : '';
             const transient =
                 msg.includes('SERVER_BUSY') ||
-                msg.includes('No contract or not a smart contract');
+                msg.includes('No contract or not a smart contract') ||
+                msg.includes('not a valid hex string');
             if (transient && i < maxAttempts - 1) {
                 await new Promise(r => setTimeout(r, delayMs));
                 continue;

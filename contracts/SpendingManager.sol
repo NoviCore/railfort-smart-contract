@@ -152,7 +152,6 @@ contract SpendingManager is ISpendingManager {
         uint256 monthly,
         uint256 total
     ) external override onlyOwner {
-        require(!_managers[manager].active, "Manager already active");
         _addManager(manager, weight, daily, weekly, monthly, total);
     }
 
@@ -429,6 +428,7 @@ contract SpendingManager is ISpendingManager {
     ) internal {
         require(manager != address(0), "Invalid manager address");
         require(weight > 0, "Weight must be > 0");
+        require(!_managers[manager].active, "Manager already active");
         _managers[manager] = ManagerConfig({
             active: true,
             weight: weight,
@@ -550,8 +550,13 @@ contract SpendingManager is ISpendingManager {
             m.totalSpent   += amount;
         }
 
-        bool ok = ITRC20(token).transferFrom(owner, recipient, amount);
-        require(ok, "transferFrom failed");
+        (bool success, bytes memory ret) = token.call(
+            abi.encodeWithSelector(ITRC20.transferFrom.selector, owner, recipient, amount)
+        );
+        require(
+            success && (ret.length == 0 || abi.decode(ret, (bool))),
+            "transferFrom failed"
+        );
 
         emit TransferExecuted(msg.sender, recipient, amount, nonce);
     }

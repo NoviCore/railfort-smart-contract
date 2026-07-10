@@ -1003,16 +1003,19 @@ contract('SpendingManager', (accounts) => {
 
     before(async () => {
       await new Promise(r => setTimeout(r, 3000));
-      const smallToken = await MockTRC20.new();
-      smSmall = await SpendingManager.new(
-        OWNER,
-        smallToken.address,
-        [OWNER, ALICE],
-        [1, 1],
-        [0, 0], [0, 0], [0, 0], [0, 0],
-        DEFAULT_TIERS,
-        3   // MAX_BATCH_SIZE = 3
-      );
+      let smallToken;
+      await withRetry(async () => {
+        smallToken = await MockTRC20.new();
+        smSmall = await SpendingManager.new(
+          OWNER,
+          smallToken.address,
+          [OWNER, ALICE],
+          [1, 1],
+          [0, 0], [0, 0], [0, 0], [0, 0],
+          DEFAULT_TIERS,
+          3   // MAX_BATCH_SIZE = 3
+        );
+      });
       await withRetry(() => smallToken.mint(OWNER, 1_000_000));
       await withRetry(() => smallToken.approve(smSmall.address, 1_000_000));
     });
@@ -1302,6 +1305,22 @@ contract('SpendingManager', (accounts) => {
       const listAfter = (await smSec.getManagerList()).length;
       assert.equal(listAfter, listBefore, 'list must not grow when re-adding a previously listed manager');
       await withRetry(() => smSec.removeManager(CAROL));
+    });
+
+    it('constructor with duplicate manager address reverts (M-02)', async () => {
+      // Before the fix, _addManager had no active-guard and the constructor
+      // would silently inflate totalActiveWeight. Now it must revert.
+      try {
+        await SpendingManager.new(
+          OWNER, secToken.address,
+          [OWNER, OWNER], [1, 2],
+          [0, 0], [0, 0], [0, 0], [0, 0],
+          [[999999, 1]], 10
+        );
+        assert.fail('should have reverted on duplicate manager');
+      } catch (e) {
+        if (e.message === 'should have reverted on duplicate manager') throw e;
+      }
     });
   });
 });

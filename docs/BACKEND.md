@@ -120,11 +120,14 @@ bytes 40–71  : amount           (32 bytes, big-endian uint256)
 bytes 72–103 : nonce            (32 bytes, big-endian uint256)
 ```
 
-### No personal-sign prefix
+### EIP-191 personal-sign prefix required
 
-**Do NOT add the Ethereum personal-sign prefix (`\x19Ethereum Signed Message:\n32`).** Sign the raw `keccak256` hash directly.
+The contract's `_buildMessageHash` **adds the EIP-191 personal-sign prefix** (`\x19Ethereum Signed Message:\n32`) before recovering the signer. Signatures produced without this prefix will recover the wrong address and every transfer will be rejected.
 
-TronWeb example:
+Use TronLink's `tronWeb.trx.signMessageV2(hash)` — it automatically prepends the EIP-191 prefix, matching what the contract expects. Do **not** sign the raw hash directly.
+
+TronWeb backend example (server-side, using a raw private key):
+
 ```javascript
 const { SigningKey, keccak256 } = tronWeb.utils.ethersUtils;
 
@@ -139,8 +142,15 @@ function buildHash(contractAddr, recipient, amount, nonce) {
 }
 
 function sign(contractAddr, recipient, amount, nonce, privateKeyHex) {
-  const hash = buildHash(contractAddr, recipient, amount, nonce);
-  const sig = new SigningKey('0x' + privateKeyHex).sign(hash);
+  const rawHash = buildHash(contractAddr, recipient, amount, nonce);
+  // Add the EIP-191 prefix manually (mirrors what signMessageV2/the contract does)
+  const prefixed = keccak256(
+    Buffer.concat([
+      Buffer.from('\x19Ethereum Signed Message:\n32'),
+      Buffer.from(rawHash.slice(2), 'hex'),
+    ])
+  );
+  const sig = new SigningKey('0x' + privateKeyHex).sign(prefixed);
   return sig.serialized; // 65-byte hex
 }
 ```
@@ -159,9 +169,9 @@ function sign(contractAddr, recipient, amount, nonce, privateKeyHex) {
 ## Nonce Management
 
 - Nonces are `uint256`. Any positive integer is valid.
-- The contract tracks used nonces in `mapping(uint256 => bool) usedNonces`.
+- The contract tracks used nonces in a bitmap (`mapping(uint256 => uint256) _nonceBitmap`).
 - The backend is responsible for generating unique nonces and persisting the current counter.
-- If the backend loses its nonce state, query `usedNonces(n)` to check if a given nonce is already taken.
+- If the backend loses its nonce state, query `isNonceUsed(n)` → `bool` to check if a given nonce is already taken.
 - Nonce `0` technically works but using `1` as the starting value avoids confusion.
 
 ---
@@ -217,8 +227,8 @@ factory.createWallet(
   monthlyLimits[],   // uint256[]: per-manager monthly limit
   totalLimits[],     // uint256[]: per-manager lifetime limit
   initialTiers[],    // AmountTier[]: [{maxAmount, threshold}, ...] sorted ascending
-                     //   threshold=0 means that range is forbidden
-                     //   amounts above last tier's maxAmount are also forbidden
+                     //   threshold must be > 0; reverts if 0 is passed
+                     //   amounts above last tier's maxAmount are forbidden
   maxBatchSize       // uint256: maximum transfers per executeBatch call (immutable after deploy)
 )
 ```
@@ -247,7 +257,7 @@ Updates all four spending limits for a manager. Takes effect immediately.
 Updates a manager's signature weight. Reverts if the new total weight would make any tier threshold unachievable.
 
 #### `setTiers(tiers[])`
-Replaces all amount tiers. Each tier: `{ maxAmount: uint256, threshold: uint256 }`. Must be sorted ascending by `maxAmount`. `threshold=0` means that range is forbidden. Reverts if any non-zero threshold exceeds current `totalActiveWeight`.
+Replaces all amount tiers. Each tier: `{ maxAmount: uint256, threshold: uint256 }`. Must be sorted ascending by `maxAmount`. `threshold` must be `> 0` — passing `0` reverts. Reverts if any threshold exceeds current `totalActiveWeight`.
 
 ```javascript
 // Example: client's diagram configuration (amounts in USDT base units, 6 decimals)
@@ -273,12 +283,6 @@ Setting a counter above the corresponding limit blocks that manager for the rest
 #### `setGlobalSpent(daily, weekly, monthly, total)`
 Same as above but for the global (contract-wide) spent counters.
 
-#### `transferOwnership(address newOwner)`
-Initiates a two-step ownership transfer. Sets `pendingOwner` to `newOwner` but does **not** change `owner` yet. Emits `OwnershipTransferInitiated`.
-
-#### `acceptOwnership()`
-Completes the ownership transfer. Must be called by the `pendingOwner` address. Clears `pendingOwner` and sets `owner` to the caller. Emits `OwnershipTransferred`.
-
 #### `pause()` / `unpause()`
 Pauses or unpauses all `execute()` and `executeBatch()` calls. Emergency stop.
 
@@ -301,7 +305,9 @@ Soft-fails (emits `TransferRejected`, does **NOT** revert, energy still consumed
 > ⚠️ A soft-fail means the transaction **lands on-chain and succeeds** — no exception is thrown, gas is consumed, but no tokens move and the nonce stays free. Always check the receipt for a `TransferRejected` event even on single `execute()` calls, not just on batches.
 
 #### `executeBatch(transfers[])`
-Submits up to `MAX_BATCH_SIZE` transfers in one transaction. All items share a single global-period reset at the start. Each item is evaluated independently with soft-fail semantics.
+Submits up to `MAX_BATCH_SIZE` transfers in one transaction. All items share a single global-period reset at the start. Each item is evaluated independently with soft-fail semantics for signature/validation failures.
+
+> ⚠️ **`executeBatch` is NOT item-atomic for fund transfer failures.** If the owner has insufficient balance or allowance for any item, `transferFrom` reverts and the **entire batch rolls back** — including items that already succeeded earlier in the same call. Ensure the owner has sufficient approved balance before broadcasting a batch.
 
 ```solidity
 struct BatchTransfer {
@@ -328,11 +334,11 @@ Current global spent counters.
 #### `isManager(address)` → `bool`
 Returns `true` if the address is currently an active manager.
 
-#### `usedNonces(uint256)` → `bool`
+#### `isNonceUsed(uint256)` → `bool`
 Returns `true` if a nonce has been consumed.
 
-#### `owner()`, `pendingOwner()`, `token()`, `paused()`, `totalActiveWeight()`, `MAX_BATCH_SIZE()`
-Public state variables. `pendingOwner()` returns the address waiting to accept ownership (zero address if no transfer in progress).
+#### `owner()`, `token()`, `paused()`, `totalActiveWeight()`, `MAX_BATCH_SIZE()`
+Public state variables.
 
 #### `globalDailyLimit()`, `globalWeeklyLimit()`, `globalMonthlyLimit()`, `globalTotalLimit()`
 Current global spending caps (0 = unlimited). Read these before broadcasting to pre-validate against global limits.
@@ -359,8 +365,6 @@ Emitted when a transfer fails without reverting. Fired by both `execute()` (on i
 | `"Global daily/weekly/monthly/total limit exceeded"` | No | Wait for reset or adjust limit |
 | `"Insufficient signature weight"` | **Yes** | Collect more signatures and retry |
 
-### `OwnershipTransferInitiated(previousOwner, newOwner)`
-### `OwnershipTransferred(previousOwner, newOwner)`
 ### `ManagerAdded(manager, weight)`
 ### `ManagerRemoved(manager)`
 ### `ManagerLimitsUpdated(manager, daily, weekly, monthly, total)`
