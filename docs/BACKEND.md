@@ -120,11 +120,19 @@ bytes 40–71  : amount           (32 bytes, big-endian uint256)
 bytes 72–103 : nonce            (32 bytes, big-endian uint256)
 ```
 
-### EIP-191 personal-sign prefix required
+### Supported signing prefixes
 
-The contract's `_buildMessageHash` **adds the EIP-191 personal-sign prefix** (`\x19Ethereum Signed Message:\n32`) before recovering the signer. Signatures produced without this prefix will recover the wrong address and every transfer will be rejected.
+The contract accepts **both** prefix formats — managers may use either:
 
-Use TronLink's `tronWeb.trx.signMessageV2(hash)` — it automatically prepends the EIP-191 prefix, matching what the contract expects. Do **not** sign the raw hash directly.
+| Method | Prefix applied | Typical user |
+|---|---|---|
+| `tronWeb.trx.signMessageV2(hash)` | `\x19Ethereum Signed Message:\n32` | Server-side / TronLink signMessageV2 |
+| `tronWeb.trx.sign(hash)` | `\x19TRON Signed Message:\n32` | TronLink Extension (browser wallet) |
+| Raw `SigningKey.sign(prefixedHash)` | Either (you control it) | Backend code |
+
+Both are recovered on-chain per signature — a batch may contain a mix of both prefix formats and all valid signers count toward the weight threshold.
+
+Do **not** sign the raw unprefixed hash directly (neither `ecrecover` path would match).
 
 TronWeb backend example (server-side, using a raw private key):
 

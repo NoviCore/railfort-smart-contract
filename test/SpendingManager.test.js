@@ -1,7 +1,7 @@
 require('dotenv').config();
 const SpendingManager = artifacts.require('SpendingManager');
 const MockTRC20       = artifacts.require('MockTRC20');
-const { toEthHex, privateKeyToTronAddr, n, signTransfer, ZERO_ADDR, fetchQuickstartKey, withRetry } = require('./helpers');
+const { toEthHex, privateKeyToTronAddr, n, signTransfer, signTransferTron, ZERO_ADDR, fetchQuickstartKey, withRetry } = require('./helpers');
 
 // Energy tracking (populated during test run, printed in after())
 const energyLog = [];
@@ -315,8 +315,8 @@ contract('SpendingManager', (accounts) => {
     });
 
     it('setting global daily spent above limit blocks all transfers', async () => {
-      await sm.setGlobalLimits(500, 0, 0, 0);
-      await sm.setGlobalSpent(500, 0, 0, 0); // already at limit
+      await withRetry(() => sm.setGlobalLimits(500, 0, 0, 0));
+      await withRetry(() => sm.setGlobalSpent(500, 0, 0, 0)); // already at limit
       const no = nextNonce();
       const sigOwner = signTransfer(sm.address, ALICE, 1, no, OWNER_KEY);
       const sigAlice = signTransfer(sm.address, ALICE, 1, no, ALICE_KEY);
@@ -664,10 +664,13 @@ contract('SpendingManager', (accounts) => {
       const beforeSpent = n((await sm.getGlobalSpent())[0]);
       const n1 = nextNonce();
 
-      await sm.executeBatch([[ALICE, 8, n1, [
-        signTransfer(sm.address, ALICE, 8, n1, OWNER_KEY),
-        signTransfer(sm.address, ALICE, 8, n1, ALICE_KEY),
-      ]]]);
+      await withRetry(async () => {
+        await sm.executeBatch([[ALICE, 8, n1, [
+          signTransfer(sm.address, ALICE, 8, n1, OWNER_KEY),
+          signTransfer(sm.address, ALICE, 8, n1, ALICE_KEY),
+        ]]]);
+        if (!await sm.isNonceUsed(n1)) throw new Error('SERVER_BUSY');
+      });
 
       assert.equal(n((await sm.getGlobalSpent())[0]), beforeSpent + 8);
     });
@@ -1049,6 +1052,88 @@ contract('SpendingManager', (accounts) => {
       } catch (e) {
         if (e.message === 'should have reverted') throw e;
       }
+    });
+  });
+
+  // ─── Signature prefix — TRON and Ethereum ─────────────────────────────────
+  //
+  // The contract accepts both "\x19Ethereum Signed Message:\n32" (EIP-191, used
+  // by server-side SigningKey and TronLink signMessageV2) and
+  // "\x19TRON Signed Message:\n32" (used by TronLink Extension trx.sign()).
+  // Managers may use either prefix freely; both count toward weight.
+
+  describe('signature prefix — TRON and Ethereum', () => {
+    let smPrefix;
+    let prefixToken;
+
+    before(async () => {
+      await new Promise(r => setTimeout(r, 3000));
+      let tok;
+      await withRetry(async () => {
+        tok = await MockTRC20.new();
+        smPrefix = await SpendingManager.new(
+          OWNER, tok.address,
+          [OWNER, ALICE], [1, 1],
+          [0, 0], [0, 0], [0, 0], [0, 0],
+          DEFAULT_TIERS, 10
+        );
+      });
+      prefixToken = tok;
+      await withRetry(() => prefixToken.mint(OWNER, 1_000_000));
+      await withRetry(() => prefixToken.approve(smPrefix.address, 1_000_000));
+    });
+
+    it('TRON-prefix: both managers sign with TRON prefix → accepted', async () => {
+      const no = nextNonce();
+      const before = n(await prefixToken.balanceOf(ALICE));
+      const sigOwner = signTransferTron(smPrefix.address, ALICE, 10, no, OWNER_KEY);
+      const sigAlice = signTransferTron(smPrefix.address, ALICE, 10, no, ALICE_KEY);
+      await withRetry(async () => {
+        await smPrefix.execute(ALICE, 10, no, [sigOwner, sigAlice]);
+        if (!await smPrefix.isNonceUsed(no)) throw new Error('SERVER_BUSY');
+      });
+      assert.equal(n(await prefixToken.balanceOf(ALICE)), before + 10);
+      assert.equal(await smPrefix.isNonceUsed(no), true);
+    });
+
+    it('Ethereum-prefix: backward compatible, still accepted', async () => {
+      const no = nextNonce();
+      const before = n(await prefixToken.balanceOf(ALICE));
+      const sigOwner = signTransfer(smPrefix.address, ALICE, 5, no, OWNER_KEY);
+      const sigAlice = signTransfer(smPrefix.address, ALICE, 5, no, ALICE_KEY);
+      await withRetry(async () => {
+        await smPrefix.execute(ALICE, 5, no, [sigOwner, sigAlice]);
+        if (!await smPrefix.isNonceUsed(no)) throw new Error('SERVER_BUSY');
+      });
+      assert.equal(n(await prefixToken.balanceOf(ALICE)), before + 5);
+      assert.equal(await smPrefix.isNonceUsed(no), true);
+    });
+
+    it('mixed: Ethereum-prefix (OWNER) + TRON-prefix (ALICE) → both count, threshold met', async () => {
+      const no = nextNonce();
+      const before = n(await prefixToken.balanceOf(ALICE));
+      const sigOwner = signTransfer(smPrefix.address, ALICE, 7, no, OWNER_KEY);
+      const sigAlice = signTransferTron(smPrefix.address, ALICE, 7, no, ALICE_KEY);
+      await withRetry(async () => {
+        await smPrefix.execute(ALICE, 7, no, [sigOwner, sigAlice]);
+        if (!await smPrefix.isNonceUsed(no)) throw new Error('SERVER_BUSY');
+      });
+      assert.equal(n(await prefixToken.balanceOf(ALICE)), before + 7);
+      assert.equal(await smPrefix.isNonceUsed(no), true);
+    });
+
+    it('TRON-prefix sig from unregistered address contributes 0 weight', async () => {
+      const no = nextNonce();
+      const carolSig = signTransferTron(smPrefix.address, ALICE, 1, no, CAROL_KEY);
+      await smPrefix.execute(ALICE, 1, no, [carolSig]);
+      assert.equal(await smPrefix.isNonceUsed(no), false);
+    });
+
+    it('single TRON-prefix sig below threshold — nonce stays free', async () => {
+      const no = nextNonce();
+      const sigOwner = signTransferTron(smPrefix.address, ALICE, 3, no, OWNER_KEY);
+      await smPrefix.execute(ALICE, 3, no, [sigOwner]);
+      assert.equal(await smPrefix.isNonceUsed(no), false);
     });
   });
 

@@ -60,9 +60,25 @@ function buildMsgHash(contractAddr, recipient, amount, nonce) {
   return keccak256(concat([prefix, arrayify(rawHash)]));
 }
 
-// Returns a 65-byte hex signature (with 0x prefix)
+// Returns a 65-byte hex signature (with 0x prefix) — Ethereum EIP-191 prefix
 function signTransfer(contractAddr, recipient, amount, nonce, privateKeyHex) {
   const msgHash = buildMsgHash(contractAddr, recipient, amount, nonce);
+  const sig = new SigningKey('0x' + privateKeyHex).sign(msgHash);
+  return sig.serialized;
+}
+
+// Reproduces SpendingManager._buildTronMessageHash():
+//   keccak256("\x19TRON Signed Message:\n32" + keccak256(abi.encodePacked(contractAddress, recipient, amount, nonce)))
+// Matches TronLink Extension trx.sign() for 32-byte payloads.
+function buildTronMsgHash(contractAddr, recipient, amount, nonce) {
+  const rawHash = keccak256(_packPayload(contractAddr, recipient, amount, nonce));
+  const prefix  = toUtf8Bytes('\x19TRON Signed Message:\n32');
+  return keccak256(concat([prefix, arrayify(rawHash)]));
+}
+
+// Returns a 65-byte hex signature (with 0x prefix) — TRON prefix
+function signTransferTron(contractAddr, recipient, amount, nonce, privateKeyHex) {
+  const msgHash = buildTronMsgHash(contractAddr, recipient, amount, nonce);
   const sig = new SigningKey('0x' + privateKeyHex).sign(msgHash);
   return sig.serialized;
 }
@@ -127,4 +143,4 @@ async function withRetry(fn, maxAttempts = 4, delayMs = 1500) {
     }
 }
 
-module.exports = { toEthHex, privateKeyToTronAddr, n, signTransfer, ZERO_ADDR, fetchQuickstartKey, withRetry };
+module.exports = { toEthHex, privateKeyToTronAddr, n, signTransfer, signTransferTron, ZERO_ADDR, fetchQuickstartKey, withRetry };

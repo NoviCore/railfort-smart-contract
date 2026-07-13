@@ -496,18 +496,25 @@ contract SpendingManager is ISpendingManager {
 
     /// Returns the valid signer set (only [0..validCount) populated) and their total weight.
     /// Resets each signer's period counters if their window has elapsed.
+    /// Accepts both the Ethereum EIP-191 prefix and the TRON prefix so that managers
+    /// using TronLink Extension (which applies "\x19TRON Signed Message:\n32") are
+    /// treated the same as those signing server-side with the Ethereum prefix.
     function _collectValidWeight(
         address recipient,
         uint256 amount,
         uint256 nonce,
         bytes[] calldata signatures
     ) internal returns (uint256 validWeight, address[] memory validSigners, uint256 validCount) {
-        bytes32 msgHash = _buildMessageHash(recipient, amount, nonce);
+        bytes32 ethHash  = _buildMessageHash(recipient, amount, nonce);
+        bytes32 tronHash = _buildTronMessageHash(recipient, amount, nonce);
         validSigners = new address[](signatures.length);
         validCount = 0;
 
         for (uint256 i = 0; i < signatures.length; i++) {
-            address signer = _recoverSigner(msgHash, signatures[i]);
+            address signer = _tryRecover(ethHash, signatures[i]);
+            if (signer == address(0) || !_managers[signer].active) {
+                signer = _tryRecover(tronHash, signatures[i]);
+            }
 
             if (!_managers[signer].active) continue;
             if (_contains(validSigners, validCount, signer)) continue;
@@ -594,9 +601,7 @@ contract SpendingManager is ISpendingManager {
         }
     }
 
-    /// @dev Hashes the payload with the EIP-191 personal-sign prefix so wallets
-    ///      like TronLink can sign it via signMessageV2() without exporting keys.
-    ///      Backend must sign: signMessageV2( keccak256(abi.encodePacked(contractAddress, recipient, amount, nonce)) )
+    // Ethereum EIP-191 personal-sign prefix.
     function _buildMessageHash(
         address recipient,
         uint256 amount,
@@ -604,6 +609,16 @@ contract SpendingManager is ISpendingManager {
     ) internal view returns (bytes32) {
         bytes32 rawHash = keccak256(abi.encodePacked(address(this), recipient, amount, nonce));
         return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", rawHash));
+    }
+
+    // TRON personal-sign prefix (used by TronLink Extension trx.sign()).
+    function _buildTronMessageHash(
+        address recipient,
+        uint256 amount,
+        uint256 nonce
+    ) internal view returns (bytes32) {
+        bytes32 rawHash = keccak256(abi.encodePacked(address(this), recipient, amount, nonce));
+        return keccak256(abi.encodePacked("\x19TRON Signed Message:\n32", rawHash));
     }
 
     /// Civil (Gregorian) calendar — Howard Hinnant's algorithm.
@@ -625,8 +640,9 @@ contract SpendingManager is ISpendingManager {
         return ts - (dom - 1) * 86400 - (ts % 86400);
     }
 
-    function _recoverSigner(bytes32 hash, bytes calldata sig) internal pure returns (address) {
-        require(sig.length == 65, "Invalid signature length");
+    // Returns address(0) on malformed or invalid sig — caller decides whether to fallback or skip.
+    function _tryRecover(bytes32 hash, bytes calldata sig) internal pure returns (address) {
+        if (sig.length != 65) return address(0);
         bytes32 r;
         bytes32 s;
         uint8 v;
@@ -637,14 +653,9 @@ contract SpendingManager is ISpendingManager {
             v := byte(0, calldataload(add(sig.offset, 64)))
         }
         if (v < 27) v += 27;
-        require(v == 27 || v == 28, "Invalid v value");
-        require(
-            uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0,
-            "Invalid s value"
-        );
-        address signer = ecrecover(hash, v, r, s);
-        require(signer != address(0), "ecrecover returned zero address");
-        return signer;
+        if (v != 27 && v != 28) return address(0);
+        if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) return address(0);
+        return ecrecover(hash, v, r, s);
     }
 
     function _contains(
