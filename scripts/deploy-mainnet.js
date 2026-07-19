@@ -57,7 +57,8 @@ const fmt = (n) => (Number(n) / 10 ** USDT_DECIMALS).toLocaleString('en-US', { m
 const sep = () => console.log('─'.repeat(60));
 
 function isTronAddress(addr) {
-  try { return tronWeb.utils.isAddress(addr); } catch { return false; }
+  // tronweb v6 moved isAddress from tronWeb.utils to the static TronWeb class
+  try { return TronWeb.isAddress(addr); } catch { return false; }
 }
 
 // ─── Config validation ────────────────────────────────────────────────────────
@@ -160,25 +161,26 @@ function printPlan() {
 
 async function deployFactory() {
   console.log('[1/3] Deploying SpendingManagerFactory...');
-  const factoryDelay = cfg.factoryOwnershipTransferDelay !== undefined
-    ? cfg.factoryOwnershipTransferDelay
-    : (cfg.ownershipTransferDelay || 0);
-
+  // Factory constructor takes NO args (owner = msg.sender). Older versions
+  // of this script passed factoryDelay — the current contract doesn't
+  // accept it, so tronweb rejects with "constructor needs 0 but 1 provided".
   const tx = await tronWeb.transactionBuilder.createSmartContract({
     abi:           factoryArtifact.abi,
     bytecode:      factoryArtifact.bytecode,
-    parameters:    [factoryDelay],
+    parameters:    [],
     feeLimit:      1000_000_000,
     userFeePercentage: 100,
     name: 'SpendingManagerFactory',
   }, DEPLOYER);
 
-  const signed   = await tronWeb.trx.sign(tx.transaction, PRIVATE_KEY);
+  // tronweb v6: createSmartContract returns the tx directly (no `.transaction`
+  // wrapper). Sign & fetch the deployed contract address off the tx itself.
+  const signed   = await tronWeb.trx.sign(tx, PRIVATE_KEY);
   const result   = await tronWeb.trx.sendRawTransaction(signed);
-  const txid     = result.transaction.txID;
+  const txid     = result.transaction ? result.transaction.txID : (result.txid || tx.txID);
   console.log('  txid:', txid);
 
-  const factoryAddr = TronWeb.address.fromHex('41' + tx.transaction.contract_address);
+  const factoryAddr = TronWeb.address.fromHex('41' + tx.contract_address);
   console.log('  SpendingManagerFactory deployed at:', factoryAddr);
   return factoryAddr;
 }
@@ -197,8 +199,7 @@ async function createWallet(factoryAddr) {
     cfg.monthlyLimits,
     cfg.totalLimits,
     cfg.tiers.map(t => [t.maxAmount, t.threshold]),
-    cfg.maxBatchSize,
-    cfg.ownershipTransferDelay || 0
+    cfg.maxBatchSize
   ).send({ feeLimit: 1000_000_000 });
 
   console.log('  txid:', receipt);
